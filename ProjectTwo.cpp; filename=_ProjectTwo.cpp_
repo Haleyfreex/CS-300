@@ -1,0 +1,299 @@
+//============================================================================
+// Name        : CS300.cpp
+// Author      : Haley O
+// Version     :
+// Copyright   : Your copyright notice
+// Description : Hello World in C++, Ansi-style
+//============================================================================
+
+#include <algorithm>
+#include <cctype>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+// ==============================
+// CS 300 Project Two - Single File
+// No CSV libraries or headers required
+// ==============================
+//
+// Data Model:
+//   Course { number, title, prereqs[] }
+// Storage:
+//   - unordered_map<string, Course> indexByNumber  -> O(1) lookups for Option 3
+//   - vector<string> allCourseKeys                 -> source of truth for sorting in Option 2
+//
+// Menu (must match project sample):
+//   1. Load Data Structure.
+//   2. Print Course List.
+//   3. Print Course.
+//   9. Exit
+//
+// Robustness:
+//   - Trims whitespace
+//   - Ignores empty lines and comment lines starting with '#' or '//'
+//   - Case-insensitive course lookup (users can type csci400)
+//   - Validates file open, duplicate IDs, and missing courses
+//
+// Sorting:
+//   - Alphanumeric lexicographic by course number (e.g., CSCI100 < CSCI200 < MATH201)
+//
+// Notes from the assignment handout:
+// Input format is "courseNumber, name, prerequisite1, prerequisite2, ..."
+// Every line has courseNumber and name; 0+ prerequisites follow, by number.
+// (Source: Course Information document)   <-- see inline citation in your report.
+//
+
+
+// ------------------------------
+// Utility helpers
+// ------------------------------
+
+static inline std::string ltrim(std::string s) {
+    size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    return s.substr(i);
+}
+
+static inline std::string rtrim(std::string s) {
+    if (s.empty()) return s;
+    size_t i = s.size();
+    while (i > 0 && std::isspace(static_cast<unsigned char>(s[i - 1]))) --i;
+    return s.substr(0, i);
+}
+
+static inline std::string trim(std::string s) {
+    return rtrim(ltrim(std::move(s)));
+}
+
+static inline std::string toUpper(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
+
+static inline bool startsWith(const std::string& s, const std::string& prefix) {
+    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
+// Simple CSV split on comma. Handles basic cases without quotes.
+// Trims whitespace around tokens.
+static std::vector<std::string> splitCSV(const std::string& line) {
+    std::vector<std::string> out;
+    std::string token;
+    std::istringstream iss(line);
+    while (std::getline(iss, token, ',')) {
+        out.push_back(trim(token));
+    }
+    // Trailing comma => last empty field
+    if (!line.empty() && line.back() == ',') out.push_back("");
+    return out;
+}
+
+// ------------------------------
+// Core model
+// ------------------------------
+
+struct Course {
+    std::string number;                 // e.g., CSCI200
+    std::string title;                  // e.g., Data Structures
+    std::vector<std::string> prereqs;   // list of course numbers
+};
+
+// ------------------------------
+// Loading and printing
+// ------------------------------
+
+struct Catalog {
+    std::unordered_map<std::string, Course> byNum; // key: uppercase course number
+    std::vector<std::string> keys;                 // original (uppercase) order of insertion
+
+    void clear() {
+        byNum.clear();
+        keys.clear();
+    }
+
+    bool exists(const std::string& courseUpper) const {
+        return byNum.find(courseUpper) != byNum.end();
+    }
+
+    // Load from CSV-like file: "number,title,prereq1,prereq2,..."
+    // Returns a status string (empty if OK; otherwise error message).
+    std::string loadFromFile(const std::string& filename) {
+        clear();
+
+        std::ifstream fin(filename);
+        if (!fin) {
+            return "Error: Could not open file: " + filename;
+        }
+
+        std::string line;
+        size_t lineNo = 0;
+        while (std::getline(fin, line)) {
+            ++lineNo;
+            std::string raw = trim(line);
+            if (raw.empty()) continue;
+            if (startsWith(raw, "#") || startsWith(raw, "//")) continue;
+
+            auto fields = splitCSV(raw);
+            if (fields.size() < 2) {
+                return "Error: Line " + std::to_string(lineNo) +
+                       " must contain at least courseNumber and title.";
+            }
+
+            std::string num = toUpper(fields[0]);
+            std::string title = fields[1];
+
+            if (num.empty() || title.empty()) {
+                return "Error: Line " + std::to_string(lineNo) +
+                       " has empty course number or title.";
+            }
+
+            if (exists(num)) {
+                return "Error: Duplicate course number '" + num + "' on line " +
+                       std::to_string(lineNo) + ".";
+            }
+
+            Course c;
+            c.number = num;
+            c.title = title;
+
+            // Remaining fields (if any) are prerequisites (by course number)
+            for (size_t i = 2; i < fields.size(); ++i) {
+                std::string p = toUpper(fields[i]);
+                if (!p.empty()) c.prereqs.push_back(p);
+            }
+
+            byNum[num] = std::move(c);
+            keys.push_back(num);
+        }
+
+        return ""; // success
+    }
+
+    // Print all courses (sorted alphanumerically by number)
+    void printCourseList() const {
+        if (keys.empty()) {
+            std::cout << "No data loaded. Please choose option 1 first.\n\n";
+            return;
+        }
+        std::vector<std::string> sorted = keys;
+        std::sort(sorted.begin(), sorted.end(), [](const std::string& a, const std::string& b){
+            return a < b; // simple lexicographic sort is sufficient for these IDs
+        });
+
+        std::cout << "Here is a sample schedule:\n\n";
+        for (const auto& k : sorted) {
+            const auto& c = byNum.at(k);
+            std::cout << c.number << ", " << c.title << "\n\n";
+        }
+    }
+
+    // Print detailed course info: title + prerequisites (numbers and titles when available)
+    void printCourseInfo(const std::string& userInput) const {
+        if (keys.empty()) {
+            std::cout << "No data loaded. Please choose option 1 first.\n\n";
+            return;
+        }
+        std::string key = toUpper(trim(userInput));
+        auto it = byNum.find(key);
+        if (it == byNum.end()) {
+            std::cout << "Course '" << userInput << "' was not found.\n\n";
+            return;
+        }
+        const Course& c = it->second;
+        std::cout << c.number << ", " << c.title << "\n";
+
+        if (c.prereqs.empty()) {
+            std::cout << "Prerequisites: None\n\n";
+            return;
+        }
+
+        // Build "Prerequisites: CSCI301, CSCI350" and optionally show titles as well
+        std::cout << "Prerequisites: ";
+        for (size_t i = 0; i < c.prereqs.size(); ++i) {
+            const std::string& p = c.prereqs[i];
+            std::cout << p;
+            if (i + 1 < c.prereqs.size()) std::cout << ", ";
+        }
+        std::cout << "\n\n";
+    }
+};
+
+// ------------------------------
+// Menu UI (matches sample)
+// ------------------------------
+
+static void printMenu() {
+    std::cout
+        << "1. Load Data Structure.\n"
+        << "2. Print Course List.\n"
+        << "3. Print Course.\n"
+        << "9. Exit\n\n";
+}
+
+int main() {
+	std::cout << "Program started ? hello from main()!" << std::endl;
+    //std::ios::sync_with_stdio(false);
+    //std::cin.tie(nullptr);
+
+    Catalog catalog;
+
+    std::cout << "Welcome to the course planner.\n\n";
+    std::cout << "Reached the menu loop setup..." << std::endl;
+    int choice = 0;
+
+    while (true) {
+        printMenu();
+        std::cout << "What would you like to do? ";
+
+        if (!(std::cin >> choice)) {
+            // Handle non-integer input
+            std::cin.clear();
+            std::string junk;
+            std::getline(std::cin, junk);
+            std::cout << "\nInvalid input. Please enter 1, 2, 3, or 9.\n\n";
+            continue;
+        }
+
+        // consume trailing newline from the numeric entry
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+        std::cout << "\n";
+        if (choice == 1) {
+            std::cout << "Enter the file name (e.g., ABCU_Advising_Program_Input.csv): ";
+            std::string filename;
+            std::getline(std::cin, filename);
+            filename = trim(filename);
+
+            std::string status = catalog.loadFromFile(filename);
+            if (!status.empty()) {
+                std::cout << status << "\n\n";
+            } else {
+                std::cout << "Data loaded successfully from '" << filename << "'.\n\n";
+            }
+
+        } else if (choice == 2) {
+            catalog.printCourseList();
+
+        } else if (choice == 3) {
+            std::cout << "What course do you want to know about? ";
+            std::string courseQuery;
+            std::getline(std::cin, courseQuery);
+            std::cout << "\n";
+            catalog.printCourseInfo(courseQuery);
+
+        } else if (choice == 9) {
+            std::cout << "Thank you for using the course planner!\n";
+            break;
+
+        } else {
+            std::cout << choice << " is not a valid option.\n\n";
+        }
+    }
+
+    return 0;
+}
+
